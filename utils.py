@@ -7,6 +7,16 @@ import cv2
 import numpy as np
 from scipy.optimize import minimize_scalar
 
+from ultralytics import YOLO
+import pandas as pd
+from tqdm import tqdm
+from PIL import Image, ImageFilter, ImageOps, ImageDraw, ImageFont
+import matplotlib.pyplot as plt
+from skimage.morphology import remove_small_objects
+from skimage import measure
+from scipy.ndimage import binary_dilation
+
+
 ### remove pandas warnings
 import warnings
 warnings.filterwarnings("ignore")
@@ -115,17 +125,9 @@ def find_bounding_box(mask):
     return rmin, rmax, cmin, cmax
 
 
-from ultralytics import YOLO
-import pandas as pd
-from tqdm import tqdm
-from PIL import Image, ImageFilter, ImageOps
-import matplotlib.pyplot as plt
-from skimage.morphology import remove_small_objects
-from skimage import measure
-from scipy.ndimage import binary_dilation
-from PIL import Image, ImageDraw, ImageFont
 
-def apply_model(model_dir, 
+
+def apply_model(model_path, 
                 imgs_dir, 
                 tabular_file, 
                 PIXEL_CM_RATIO = 118.11, 
@@ -135,7 +137,7 @@ def apply_model(model_dir,
     """
     Apply the YOLO model to the images in the specified directory and extract the masks.
 
-    param: model_dir (str): Directory containing the model files.
+    param: model_path (str): Path to the YOLO model.
     param: imgs_dir (str): Directory containing the images.
     param: tabular_file (str): Path to the tabular file containing the information about the images.
     param: PIXEL_CM_RATIO (float): Pixel to cm ratio. Default is 118.11.
@@ -149,7 +151,6 @@ def apply_model(model_dir,
 
     ROOT_DIR = Path(".")
 
-    model_path = ROOT_DIR / model_dir
     imgs_path = ROOT_DIR / imgs_dir
     tabular_file = ROOT_DIR / tabular_file
 
@@ -157,7 +158,7 @@ def apply_model(model_dir,
     os.makedirs(ROOT_DIR / "processed_imgs", exist_ok=True)
 
     # Load model
-    model = YOLO(model_path/ "best.pt" , task='segment')
+    model = YOLO(model_path , task='segment')
 
     tabular_file = pd.read_excel(tabular_file)
 
