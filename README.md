@@ -1,4 +1,9 @@
 # Ceramatic 2.0 
+<p align="center">
+<img src="https://github.com/lrncrd/Ceramatic2.0/blob/main/imgs/logo_ceramatic.png" width="300"/>
+</p>
+
+<hr>
 
 Supplementary materials for the paper "*From pencil to pixel: assessing Ceramatic 2.0 against manual and laser-aided techniques in archaeological pottery documentation*"
 
