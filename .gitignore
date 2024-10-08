@@ -163,17 +163,16 @@ cython_debug/
 
 
 #pt
-#*.pt
+
 
 ## npz
 *.npz
 
-real_scansioni/*
-model_inferece/*
 
 inference/*
 prediction_diagnostic/*
 processed_imgs/*
+*.pt
 
 ## xlsx
 #*.xlsx
