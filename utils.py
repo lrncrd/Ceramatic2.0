@@ -131,9 +131,11 @@ def apply_model(model_path,
                 imgs_dir, 
                 tabular_file, 
                 PIXEL_CM_RATIO = 118.11, 
+                confidence_threshold = 0.8,
                 diagnostic = False, 
                 diagnostic_plots = False,
-                add_bar = False):
+                add_bar = False,
+                median_filter = 41):
     """
     Apply the YOLO model to the images in the specified directory and extract the masks.
 
@@ -141,31 +143,35 @@ def apply_model(model_path,
     param: imgs_dir (str): Directory containing the images.
     param: tabular_file (str): Path to the tabular file containing the information about the images.
     param: PIXEL_CM_RATIO (float): Pixel to cm ratio. Default is 118.11.
+    param: confidence_threshold (float): Confidence threshold for the YOLO model. Default is 0.8.
     param: diagnostic (bool): If True, only process the first 5 images for diagnostic purposes. Default is False.
     param: diagnostic_plots (bool): If True, save diagnostic plots. Default is False.
     param: add_bar (bool): If True, add a bar to the processed images. Default is False.
+    param: median_filter (int): Size of the median blur filter. Default is 41.
     return: list: a numpy array containing the processed images.
     
     """
 
 
     ROOT_DIR = Path(".")
-
     imgs_path = ROOT_DIR / imgs_dir
     tabular_file = ROOT_DIR / tabular_file
-
     os.makedirs(ROOT_DIR / "prediction_diagnostic", exist_ok=True)
     os.makedirs(ROOT_DIR / "processed_imgs", exist_ok=True)
 
     # Load model
     model = YOLO(model_path , task='segment')
 
-    tabular_file = pd.read_excel(tabular_file)
+    # Load tabular file
+    tabular_file_ext = tabular_file.suffix
+    if tabular_file_ext == ".csv":
+        tabular_file = pd.read_csv(tabular_file)
+    elif tabular_file_ext == ".xlsx":
+        tabular_file = pd.read_excel(tabular_file)
 
     processed_imgs = []    
 
-    ## start the loop
-
+    ## Start the loop
     for img in tqdm(os.listdir(imgs_path)[:5]) if diagnostic else tqdm(os.listdir(imgs_path)):
         
         order = []
@@ -173,60 +179,48 @@ def apply_model(model_path,
         mask_list = []     
         
         img_name = img.split(".")[0]
-
         img_open = Image.open(imgs_path/img)
 
         if img_open.size[1] >= img_open.size[0]:
             padding = int(img_open.size[1] - img_open.size[0])
             img_open = ImageOps.expand(img_open, border=(padding, 0), fill='white')
 
-        results = model.predict(img_open, save_crop=False, conf = 0.8, retina_masks = True, verbose = False, imgsz = 1024)
-
+        results = model.predict(img_open, save_crop=False, conf = confidence_threshold, retina_masks = True, verbose = False, imgsz = 1024)
         result_array = results[0].plot(masks=True)
 
         ### Create a series of diagnostic plots if specified
-
-        if diagnostic_plots:
-        
-            fig = plt.figure(figsize=(8, 8))
-           
+        if diagnostic_plots:        
+            fig = plt.figure(figsize=(8, 8))           
             plt.imshow(result_array)
-
             fig.savefig(ROOT_DIR / "prediction_diagnostic" / f"diagnostic_{img_name}.png", dpi=300, bbox_inches="tight")
-
             plt.close(fig)
 
         ### Extract the masks
-
         extracted_masks = results[0].masks.data
         masks_array = extracted_masks.cpu().numpy()
 
-        ### Sort the masks by the x coordinate of the bounding box       
-
+        ### Sort the masks by the x coordinate of the bounding box
         for i in range(len(masks_array)):
             num = find_bounding_box(masks_array[i])[2]
             order.append((i, num))         
 
-        ### sort the masks by the x coordinate of the bounding box
+        ### Sort the masks by the x coordinate of the bounding box
         order.sort(key=lambda x: x[1]) 
 
         ### Select corresponding tabular data
         df_info_tab = tabular_file.loc[tabular_file["TAV"] == int(img_name)]        
-        df_info_tab["RIB"] = df_info_tab["RIB"].astype(bool) 
+        df_info_tab["FLIP"] = df_info_tab["FLIP"].astype(bool) 
 
-        kernel = np.ones((9, 9), np.uint8) #5
+        ### Process the masks
+        kernel = np.ones((9, 9), np.uint8)
 
         if len(order) == len(df_info_tab):
-
             for i in range(len(order)):
                 img_list.append(Image.fromarray(masks_array[order[i][0]].astype(np.uint8) * 255))
 
             img_list_processed = [cv2.GaussianBlur(np.array(img), (9, 9), 0) for img in img_list]
             img_list_processed = [cv2.morphologyEx(img, cv2.MORPH_OPEN, kernel) for img in img_list_processed]
-            ### apply a mode filter to the masks
-            img_list_processed = [cv2.medianBlur(np.array(img), 41) for img in img_list_processed]
-
-            
+            img_list_processed = [cv2.medianBlur(np.array(img), median_filter) for img in img_list_processed]          
             img_array_processed = np.array(img_list_processed)        
 
             for i in range(len(img_array_processed)):
@@ -235,16 +229,15 @@ def apply_model(model_path,
                 mask = mask / 255
                 mask = remove_small_objects(mask.astype(bool), min_size=mask.sum()//10, connectivity=1).astype(int)
 
-
-                if df_info_tab.iloc[i]["RIB"] == True:
+                if df_info_tab.iloc[i]["FLIP"] == True:
                     mask = np.flip(mask, axis=1)
 
                 mask_list.append(mask)
-                processed_imgs.append((img_name, df_info_tab.iloc[i]['INV (PT)'].astype(int), mask))
+                processed_imgs.append((img_name, df_info_tab.iloc[i]['INV'].astype(int), mask))
 
+            ### For each row, get the first and pixel of the mask
             for ids, mask in enumerate(mask_list):
-
-                ### for each row, get the first and pixel of the mask
+                
                 first_pixel = []
                 for i in range(mask.shape[0]):
                     for j in range(mask.shape[1]):
@@ -253,16 +246,14 @@ def apply_model(model_path,
                             break
 
                 contours = measure.find_contours(np.pad(mask, (1,1)))
-
                 contour_image = np.zeros_like(np.pad(mask, (1,1)))
-
-                my_list = []
+                contours_list = []
 
                 for contour in contours:
                     for coord in contour:
                         x, y = int(coord[0]), int(coord[1])
                         contour_image[x, y] = 1
-                        my_list.append((x,y))
+                        contours_list.append((x,y))
 
                 contour_image_2 = np.zeros_like(contour_image)
 
@@ -275,12 +266,11 @@ def apply_model(model_path,
                         if contour_image[second_possible_value, possible_value] == 1:
                             values.append((second_possible_value, possible_value))
 
-                index_point = my_list.index(values[0])
-
-                for x, y in my_list[:index_point]:
+                index_point = contours_list.index(values[0])
+                for x, y in contours_list[:index_point]:
                             contour_image_2[x, y] = 1
 
-                ### for each row, get the first and pixel of the mask
+                ### For each row, get the first and pixel of the mask
                 first_pixel = []
                 for i in range(mask.shape[0]):
                     for j in range(mask.shape[1]):
@@ -288,16 +278,16 @@ def apply_model(model_path,
                             first_pixel.append((i, j))
                             break
 
-                ### remove the fraction of the first pixel using the gradient
+                ### Remove the fraction of the first pixel using the gradient
                 gradients = np.gradient(np.array(first_pixel)[:, 1], axis=0)
                 zero_gradient_mask = gradients == 0
                 last_zero_gradient = np.where(zero_gradient_mask)[0][-1]
                                 
-                # get the diameter of the pot in pixel
-                diam_pix = df_info_tab.iloc[ids]["DIAM (cm)"] * PIXEL_CM_RATIO
+                # Get the diameter of the pot in pixel
+                diam_pix = df_info_tab.iloc[ids]["DIAM"] * PIXEL_CM_RATIO
 
                 if diam_pix > 0:
-                    ### create a mask with the first pixel of each row
+                    ### Create a mask with the first pixel of each row
                     first_pixel_mask = np.zeros_like(mask)
                     for i, j in first_pixel:
                         if i < last_zero_gradient:
@@ -308,51 +298,44 @@ def apply_model(model_path,
                     max_values = np.max(np.where(first_pixel_mask), axis=1)
                     contour_image_2[max_values[0]:, :] = 0
        
-                    ### dilate the mask
+                    ### Dilate the mask
                     first_pixel_mask = binary_dilation(contour_image_2, iterations=5)
 
-                    ### remove 1 pixel from each side of the mask
+                    ### Remove 1 pixel from each side of the mask
                     first_pixel_mask = first_pixel_mask[1:-1, 1:-1]
 
-                    ### real dimension of the pot in pixel
-                    empty_mask = np.zeros((mask.shape[0], int(diam_pix + (my_list[index_point][1]*2))))
+                    ### Real dimension of the pot in pixel
+                    empty_mask = np.zeros((mask.shape[0], int(diam_pix + (contours_list[index_point][1]*2))))
 
-                    ### apply the mask and the first pixel mask to the empty mask
+                    ### Apply the mask and the first pixel mask to the empty mask
                     empty_mask[:, :mask.shape[1]] = mask
                     empty_mask_flipped = np.flip(empty_mask, axis=1)
                     empty_mask_flipped[:, :mask.shape[1]] = first_pixel_mask
                     empty_mask = np.flip(empty_mask_flipped, axis=1)
 
-                    ### create the diameter rim mask
+                    ### Create the diameter rim mask
                     empty_mask[0:5, :] = 1
 
-                    ### remove the diameter rim mask outside the profile and the first pixel mask
+                    ### Remove the diameter rim mask outside the profile and the first pixel mask
                     empty_mask = np.flip(empty_mask, axis=1)
 
                     for i, j in first_pixel:
                         empty_mask[i, :j] = 0
 
                     empty_mask = np.flip(empty_mask, axis=1)
-
                     for i, j in first_pixel:
                         empty_mask[i, :j] = 0
 
-                    ### create the symmetry mask
+                    ### Create the symmetry mask
                     empty_mask[:, empty_mask.shape[1] // 2: empty_mask.shape[1] // 2+5] = 1
 
-                    
-
                     res = empty_mask.copy()
-
                     res_2 = Image.fromarray(res * 255)
-
                     res_2= res_2.convert("L")
-
-                    res_2 = ImageOps.invert(res_2)      
-
+                    res_2 = ImageOps.invert(res_2)
                     res_2 = ImageOps.expand(res_2, border=200, fill='white')
 
-                    ### add a bar
+                    ### Add a bar
                     if add_bar:
                         np_pipe = np.array(res_2)
                     
@@ -363,21 +346,20 @@ def apply_model(model_path,
                         final_y = int(np_pipe.shape[0]*0.95 + 10)
 
                         np_pipe[initial_y:final_y, initial_x:final_x] = 1
-
                         res_2 = Image.fromarray(np_pipe)
 
 
-                    ### add a title to the image with the INV number a the bottom of the image
+                    ### Add a title to the image with the INV number a the bottom of the image
                     draw = ImageDraw.Draw(res_2)
 
 
                     font = ImageFont.truetype("arial.ttf", 100)
-                    draw.text((25, 10), f"{df_info_tab.iloc[ids]['INV (PT)'].astype(int)}", 
+                    draw.text((25, 10), f"{df_info_tab.iloc[ids]['INV'].astype(int)}", 
                               (0), font=font,
                               align="center")
 
 
-                    res_2.save(f"processed_imgs/{df_info_tab.iloc[ids]['INV (PT)'].astype(int)}.jpg")
+                    res_2.save(f"processed_imgs/{df_info_tab.iloc[ids]['INV'].astype(int)}.jpg")
                     
                 else:
 
@@ -391,7 +373,6 @@ def apply_model(model_path,
                     
                         initial_x = int(np_pipe.shape[1]*0.05)
                         final_x = int(np_pipe.shape[1]*0.05 + PIXEL_CM_RATIO)
-
                         initial_y = int(np_pipe.shape[0]*0.95)
                         final_y = int(np_pipe.shape[0]*0.95 + 10)
 
@@ -401,12 +382,13 @@ def apply_model(model_path,
                         
                     draw = ImageDraw.Draw(res_2)
                     font = ImageFont.truetype("arial.ttf", 100)
-                    draw.text((25, 10), f"{df_info_tab.iloc[ids]['INV (PT)'].astype(int)}", 
+                    draw.text((25, 10), f"{df_info_tab.iloc[ids]['INV'].astype(int)}", 
                               (0), font=font,
                               align="center")                                               
-                    res_2.save(f"processed_imgs/{df_info_tab.iloc[ids]['INV (PT)'].astype(int)}.jpg")
+                    res_2.save(f"processed_imgs/{df_info_tab.iloc[ids]['INV'].astype(int)}.jpg")
             
         else:
             print(f"Error in image {img_name}: number of masks does not match the number of rows in the tabular file. The image will be skipped.")
                 
     return processed_imgs
+
