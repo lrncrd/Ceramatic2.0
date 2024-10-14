@@ -7,7 +7,7 @@
 
 Supplementary materials for the paper "*From pencil to pixel: assessing Ceramatic 2.0 against manual and laser-aided techniques in archaeological pottery documentation*"
 
-You can find the weights of the model [here](add_link).
+You can find the weights of the model [here](https://drive.google.com/file/d/1b23yWPZ0LKerIM8CWz2DcbhapThCnT7A/view?usp=drive_link).
 
 To run the code on the provided example images, you can use the following command:
 
