@@ -15,4 +15,27 @@ To run the code on the provided example images, you can use the following comman
 python ceramatic2.py --model_path "Ceramatic_model_V1.pt" --imgs_dir "demo/example_imgs" --tabular_file "demo/metadata_example.xlsx" --diagnostic --diagnostic_plots --add_bar --install_requirements
 ```
 
+## TO DO
 
+- Add inventory placement options
+- Graphic scale styles
+- Diameter line options
+- Profile style (filled / outline)
+- Basic plotting options (PCA ecc)
+- Continuation lines
+
+
+## Version history
+
+- 1.0.0 (14/10/2024): First version release
+
+
+<hr>
+
+<p align="center">
+<img src="https://github.com/lrncrd/Ceramatic2.0/blob/main/imgs/Salt_Project_logo.jpg" width="200"/>
+</p>
+
+<p align="center">
+Supported by the Netherlands Organisation for Scientific Research (NWO), grant 406.20.HW.013
+</p>
