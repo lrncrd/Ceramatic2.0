@@ -1,6 +1,6 @@
 # Ceramatic 2.0 
 <p align="center">
-<img src="https://github.com/lrncrd/Ceramatic2.0/blob/main/imgs/logo_ceramatic.png" width="300"/>
+<img src="https://github.com/lrncrd/Ceramatic2.0/blob/ceramatic-main/imgs/logo_ceramatic.png" width="300"/>
 </p>
 
 <hr>
@@ -33,7 +33,7 @@ python ceramatic2.py --model_path "Ceramatic_model_V1.pt" --imgs_dir "demo/examp
 <hr>
 
 <p align="center">
-<img src="https://github.com/lrncrd/Ceramatic2.0/blob/main/imgs/Salt_Project_logo.jpg" width="200"/>
+<img src="https://github.com/lrncrd/Ceramatic2.0/blob/ceramatic-main/imgs/Salt_Project_logo.jpg" width="200"/>
 </p>
 
 <p align="center">
