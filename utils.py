@@ -124,18 +124,40 @@ def find_bounding_box(mask):
     cmin, cmax = np.where(cols)[0][[0, -1]]
     return rmin, rmax, cmin, cmax
 
+import os
+import numpy as np
+import pandas as pd
+from pathlib import Path
+from PIL import Image, ImageOps, ImageDraw, ImageFont
+from ultralytics import YOLO
+import cv2
+from skimage import measure
+from scipy.ndimage import binary_dilation
+from tqdm import tqdm
+import matplotlib.pyplot as plt
+import logging
 
+def pos_inv_func(pos_inv, res_2, border):
+    if pos_inv == 1:
+        return (25, 10)
+    elif pos_inv == 2:
+        return ((res_2.size[0] - border) // 2, 10)
+    elif pos_inv == 3:
+        return (res_2.size[0] - border) // 2 , (res_2.size[1] - border // 2)-20
+    else:
+        print("Invalid position for the INV number. The number will be placed at the top left corner (pos 1).")
+        return (25, 10)
 
-
-def apply_model(model_path, 
-                imgs_dir, 
-                tabular_file, 
-                PIXEL_CM_RATIO = 118.11, 
+def apply_model(model_path,
+                imgs_dir,
+                tabular_file,
+                PIXEL_CM_RATIO = 118.11,
                 confidence_threshold = 0.8,
-                diagnostic = False, 
+                diagnostic = False,
                 diagnostic_plots = False,
                 add_bar = False,
-                median_filter = 41):
+                median_filter = 41,
+                inv_position = 1):
     """
     Apply the YOLO model to the images in the specified directory and extract the masks.
 
@@ -148,10 +170,10 @@ def apply_model(model_path,
     param: diagnostic_plots (bool): If True, save diagnostic plots. Default is False.
     param: add_bar (bool): If True, add a bar to the processed images. Default is False.
     param: median_filter (int): Size of the median blur filter. Default is 41.
+    param: inv_pos (int): Position of the INV number in the image. Default is 1 (possible values are 1, 2, 3).
     return: list: a numpy array containing the processed images.
-    
     """
-
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
     ROOT_DIR = Path(".")
     imgs_path = ROOT_DIR / imgs_dir
@@ -160,7 +182,7 @@ def apply_model(model_path,
     os.makedirs(ROOT_DIR / "processed_imgs", exist_ok=True)
 
     # Load model
-    model = YOLO(model_path , task='segment')
+    model = YOLO(model_path, task='segment')
 
     # Load tabular file
     tabular_file_ext = tabular_file.suffix
@@ -169,226 +191,249 @@ def apply_model(model_path,
     elif tabular_file_ext == ".xlsx":
         tabular_file = pd.read_excel(tabular_file)
 
-    processed_imgs = []    
+    processed_imgs = []
+
+    border = 200
 
     ## Start the loop
     for img in tqdm(os.listdir(imgs_path)[:5]) if diagnostic else tqdm(os.listdir(imgs_path)):
-        
-        order = []
-        img_list = []
-        mask_list = []     
-        
-        img_name = img.split(".")[0]
-        img_open = Image.open(imgs_path/img)
+        try:
+            logging.info(f"Processing image: {img}")
 
-        if img_open.size[1] >= img_open.size[0]:
-            padding = int(img_open.size[1] - img_open.size[0])
-            img_open = ImageOps.expand(img_open, border=(padding, 0), fill='white')
+            order = []
+            img_list = []
+            mask_list = []
 
-        results = model.predict(img_open, save_crop=False, conf = confidence_threshold, retina_masks = True, verbose = False, imgsz = 1024)
-        result_array = results[0].plot(masks=True)
+            img_name = img.split(".")[0]
+            img_open = Image.open(imgs_path/img)
 
-        ### Create a series of diagnostic plots if specified
-        if diagnostic_plots:        
-            fig = plt.figure(figsize=(8, 8))           
-            plt.imshow(result_array)
-            fig.savefig(ROOT_DIR / "prediction_diagnostic" / f"diagnostic_{img_name}.png", dpi=300, bbox_inches="tight")
-            plt.close(fig)
+            if img_open.size[1] >= img_open.size[0]:
+                padding = int(img_open.size[1] - img_open.size[0])
+                img_open = ImageOps.expand(img_open, border=(padding, 0), fill='white')
 
-        ### Extract the masks
-        extracted_masks = results[0].masks.data
-        masks_array = extracted_masks.cpu().numpy()
+            results = model.predict(img_open, save_crop=False, conf=confidence_threshold, retina_masks=True, verbose=False, imgsz=1024)
+            result_array = results[0].plot(masks=True)
 
-        ### Sort the masks by the x coordinate of the bounding box
-        for i in range(len(masks_array)):
-            num = find_bounding_box(masks_array[i])[2]
-            order.append((i, num))         
+            ### Create a series of diagnostic plots if specified
+            if diagnostic_plots:
+                fig = plt.figure(figsize=(8, 8))
+                plt.imshow(result_array)
+                fig.savefig(ROOT_DIR / "prediction_diagnostic" / f"diagnostic_{img_name}.png", dpi=300, bbox_inches="tight")
+                plt.close(fig)
 
-        ### Sort the masks by the x coordinate of the bounding box
-        order.sort(key=lambda x: x[1]) 
+            ### Extract the masks
+            extracted_masks = results[0].masks.data
+            masks_array = extracted_masks.cpu().numpy()
 
-        ### Select corresponding tabular data
-        df_info_tab = tabular_file.loc[tabular_file["TAV"] == int(img_name)]        
-        df_info_tab["FLIP"] = df_info_tab["FLIP"].astype(bool) 
+            ### Sort the masks by the x coordinate of the bounding box
+            for i in range(len(masks_array)):
+                num = find_bounding_box(masks_array[i])[2]
+                order.append((i, num))
 
-        ### Process the masks
-        kernel = np.ones((9, 9), np.uint8)
+            ### Sort the masks by the x coordinate of the bounding box
+            order.sort(key=lambda x: x[1])
 
-        if len(order) == len(df_info_tab):
-            for i in range(len(order)):
-                img_list.append(Image.fromarray(masks_array[order[i][0]].astype(np.uint8) * 255))
+            ### Select corresponding tabular data
+            df_info_tab = tabular_file.loc[tabular_file["TAV"] == int(img_name)]
+            df_info_tab["FLIP"] = df_info_tab["FLIP"].astype(bool)
 
-            img_list_processed = [cv2.GaussianBlur(np.array(img), (9, 9), 0) for img in img_list]
-            img_list_processed = [cv2.morphologyEx(img, cv2.MORPH_OPEN, kernel) for img in img_list_processed]
-            img_list_processed = [cv2.medianBlur(np.array(img), median_filter) for img in img_list_processed]          
-            img_array_processed = np.array(img_list_processed)        
+            ### Process the masks
+            kernel = np.ones((9, 9), np.uint8)
 
-            for i in range(len(img_array_processed)):
-                rmin, rmax, cmin, cmax = find_bounding_box(img_array_processed[i])
-                mask = img_array_processed[i][rmin:rmax, cmin:cmax]
-                mask = mask / 255
-                mask = remove_small_objects(mask.astype(bool), min_size=mask.sum()//10, connectivity=1).astype(int)
+            if len(order) == len(df_info_tab):
+                for i in range(len(order)):
+                    img_list.append(Image.fromarray(masks_array[order[i][0]].astype(np.uint8) * 255))
 
-                if df_info_tab.iloc[i]["FLIP"] == True:
-                    mask = np.flip(mask, axis=1)
+                img_list_processed = [cv2.GaussianBlur(np.array(img), (9, 9), 0) for img in img_list]
+                img_list_processed = [cv2.morphologyEx(img, cv2.MORPH_OPEN, kernel) for img in img_list_processed]
+                img_list_processed = [cv2.medianBlur(np.array(img), median_filter) for img in img_list_processed]
+                img_array_processed = np.array(img_list_processed)
 
-                mask_list.append(mask)
-                processed_imgs.append((img_name, df_info_tab.iloc[i]['INV'].astype(int), mask))
+                for i in range(len(img_array_processed)):
+                    rmin, rmax, cmin, cmax = find_bounding_box(img_array_processed[i])
+                    mask = img_array_processed[i][rmin:rmax, cmin:cmax]
+                    mask = mask / 255
+                    mask = remove_small_objects(mask.astype(bool), min_size=mask.sum()//10, connectivity=1).astype(int)
 
-            ### For each row, get the first and pixel of the mask
-            for ids, mask in enumerate(mask_list):
-                
-                first_pixel = []
-                for i in range(mask.shape[0]):
-                    for j in range(mask.shape[1]):
-                        if mask[i, j] == 1:
-                            first_pixel.append((i, j))
-                            break
+                    if df_info_tab.iloc[i]["FLIP"] == True:
+                        mask = np.flip(mask, axis=1)
 
-                contours = measure.find_contours(np.pad(mask, (1,1)))
-                contour_image = np.zeros_like(np.pad(mask, (1,1)))
-                contours_list = []
-
-                for contour in contours:
-                    for coord in contour:
-                        x, y = int(coord[0]), int(coord[1])
-                        contour_image[x, y] = 1
-                        contours_list.append((x,y))
-
-                contour_image_2 = np.zeros_like(contour_image)
-
-                first_possibile_value = [first_pixel[0][1] + 1, first_pixel[0][1], first_pixel[0][1]-1]
-                second_possibile_value = [first_pixel[0][0] + 1, first_pixel[0][0], first_pixel[0][0]-1]
-
-                values = []
-                for possible_value in first_possibile_value:
-                    for second_possible_value in second_possibile_value:
-                        if contour_image[second_possible_value, possible_value] == 1:
-                            values.append((second_possible_value, possible_value))
-
-                index_point = contours_list.index(values[0])
-                for x, y in contours_list[:index_point]:
-                            contour_image_2[x, y] = 1
+                    mask_list.append(mask)
+                    processed_imgs.append((img_name, df_info_tab.iloc[i]['INV'].astype(int), mask))
 
                 ### For each row, get the first and pixel of the mask
-                first_pixel = []
-                for i in range(mask.shape[0]):
-                    for j in range(mask.shape[1]):
-                        if mask[i, j] == 1:
-                            first_pixel.append((i, j))
-                            break
+                for ids, mask in enumerate(mask_list):
+                    try:
+                        logging.info(f"Processing mask {ids+1} for image {img_name}")
 
-                ### Remove the fraction of the first pixel using the gradient
-                gradients = np.gradient(np.array(first_pixel)[:, 1], axis=0)
-                zero_gradient_mask = gradients == 0
-                last_zero_gradient = np.where(zero_gradient_mask)[0][-1]
+                        first_pixel = []
+                        for i in range(mask.shape[0]):
+                            for j in range(mask.shape[1]):
+                                if mask[i, j] == 1:
+                                    first_pixel.append((i, j))
+                                    break
+
+                        contours = measure.find_contours(np.pad(mask, (1,1)))
+                        contour_image = np.zeros_like(np.pad(mask, (1,1)))
+                        contours_list = []
+
+                        for contour in contours:
+                            for coord in contour:
+                                x, y = int(coord[0]), int(coord[1])
+                                contour_image[x, y] = 1
+                                contours_list.append((x,y))
+
+                        contour_image_2 = np.zeros_like(contour_image)
+
+                        first_possibile_value = [first_pixel[0][1] + 1, first_pixel[0][1], first_pixel[0][1]-1]
+                        second_possibile_value = [first_pixel[0][0] + 1, first_pixel[0][0], first_pixel[0][0]-1]
+
+                        values = []
+                        for possible_value in first_possibile_value:
+                            for second_possible_value in second_possibile_value:
+                                if contour_image[second_possible_value, possible_value] == 1:
+                                    values.append((second_possible_value, possible_value))
+
+                        index_point = contours_list.index(values[0])
+                        for x, y in contours_list[:index_point]:
+                                    contour_image_2[x, y] = 1
+
+                        ### For each row, get the first and pixel of the mask
+                        first_pixel = []
+                        for i in range(mask.shape[0]):
+                            for j in range(mask.shape[1]):
+                                if mask[i, j] == 1:
+                                    first_pixel.append((i, j))
+                                    break
+
+                        ### Remove the fraction of the first pixel using the gradient
+                        gradients = np.gradient(np.array(first_pixel)[:, 1], axis=0)
+                        zero_gradient_mask = gradients == 0
+                        last_zero_gradient = np.where(zero_gradient_mask)[0][-1]
+
+                        # Get the diameter of the pot in pixel
+                        diam_pix = df_info_tab.iloc[ids]["DIAM"] * PIXEL_CM_RATIO
+
+                        if diam_pix > 0:
+                            ### Create a mask with the first pixel of each row
+                            first_pixel_mask = np.zeros_like(mask)
+                            for i, j in first_pixel:
+                                if i < last_zero_gradient:
+                                    first_pixel_mask[i, j] = 1
+                                elif i > last_zero_gradient and i > len(first_pixel)//2:
+                                    first_pixel_mask[i, j] = 0
+
+                            max_values = np.max(np.where(first_pixel_mask), axis=1)
+                            contour_image_2[max_values[0]:, :] = 0
+
+                            ### Dilate the mask
+                            first_pixel_mask = binary_dilation(contour_image_2, iterations=5)
+
+                            ### Remove 1 pixel from each side of the mask
+                            first_pixel_mask = first_pixel_mask[1:-1, 1:-1]
+
+                            ### Real dimension of the pot in pixel
+                            empty_mask = np.zeros((mask.shape[0], int(diam_pix + (contours_list[index_point][1]*2))))
+
+                            ### Apply the mask and the first pixel mask to the empty mask
+                            empty_mask[:, :mask.shape[1]] = mask
+                            empty_mask_flipped = np.flip(empty_mask, axis=1)
+                            empty_mask_flipped[:, :mask.shape[1]] = first_pixel_mask
+                            empty_mask = np.flip(empty_mask_flipped, axis=1)
+
+                            ### Create the diameter rim mask
+                            empty_mask[0:5, :] = 1
+
+                            ### Remove the diameter rim mask outside the profile and the first pixel mask
+                            empty_mask = np.flip(empty_mask, axis=1)
+
+                            for i, j in first_pixel:
+                                empty_mask[i, :j] = 0
+
+                            empty_mask = np.flip(empty_mask, axis=1)
+                            for i, j in first_pixel:
+                                empty_mask[i, :j] = 0
+
+                            ### Create the symmetry mask
+                            empty_mask[:, empty_mask.shape[1] // 2: empty_mask.shape[1] // 2+5] = 1
+
+                            res = empty_mask.copy()
+                            #logging.info(f"Shape of res: {res.shape}, dtype: {res.dtype}")
+                            res_2 = Image.fromarray((res * 255).astype(np.uint8))
+
+                            res_2 = res_2.convert("L")
+                            res_2 = ImageOps.invert(res_2)
+                            res_2 = ImageOps.expand(res_2, border=border, fill='white')
+
+                            ### Add a bar
+                            if add_bar:
+                                np_pipe = np.array(res_2)
+
+                                initial_x = int(np_pipe.shape[1]*0.05)
+                                final_x = int(np_pipe.shape[1]*0.05 + PIXEL_CM_RATIO)
+
+                                initial_y = int(np_pipe.shape[0]*0.95)
+                                final_y = int(np_pipe.shape[0]*0.95 + 10)
+
+                                np_pipe[initial_y:final_y, initial_x:final_x] = 1
+                                res_2 = Image.fromarray(np_pipe)
+
+                            ### Add a title to the image with the INV number a the bottom of the image
+                            draw = ImageDraw.Draw(res_2)
+
+                            font = ImageFont.load_default(100)
+
+
                                 
-                # Get the diameter of the pot in pixel
-                diam_pix = df_info_tab.iloc[ids]["DIAM"] * PIXEL_CM_RATIO
+                            pos = pos_inv_func(inv_position, res_2, border)
 
-                if diam_pix > 0:
-                    ### Create a mask with the first pixel of each row
-                    first_pixel_mask = np.zeros_like(mask)
-                    for i, j in first_pixel:
-                        if i < last_zero_gradient:
-                            first_pixel_mask[i, j] = 1
-                        elif i > last_zero_gradient and i > len(first_pixel)//2:
-                            first_pixel_mask[i, j] = 0
-                             
-                    max_values = np.max(np.where(first_pixel_mask), axis=1)
-                    contour_image_2[max_values[0]:, :] = 0
-       
-                    ### Dilate the mask
-                    first_pixel_mask = binary_dilation(contour_image_2, iterations=5)
+                           
+                            draw.text((pos), f"{df_info_tab.iloc[ids]['INV'].astype(int)}",
+                                    (0), font=font,
+                                    align="center")
 
-                    ### Remove 1 pixel from each side of the mask
-                    first_pixel_mask = first_pixel_mask[1:-1, 1:-1]
+                        else:
+                            #logging.info(f"Shape of mask: {mask.shape}, dtype: {mask.dtype}")
+                            res_2 = Image.fromarray((mask * 255).astype(np.uint8))
 
-                    ### Real dimension of the pot in pixel
-                    empty_mask = np.zeros((mask.shape[0], int(diam_pix + (contours_list[index_point][1]*2))))
+                            res_2 = res_2.convert("L")
+                            res_2 = ImageOps.invert(res_2)
+                            res_2 = ImageOps.expand(res_2, border=200, fill='white')
+                            ### add a bar
+                            if add_bar:
+                                np_pipe = np.array(res_2)
 
-                    ### Apply the mask and the first pixel mask to the empty mask
-                    empty_mask[:, :mask.shape[1]] = mask
-                    empty_mask_flipped = np.flip(empty_mask, axis=1)
-                    empty_mask_flipped[:, :mask.shape[1]] = first_pixel_mask
-                    empty_mask = np.flip(empty_mask_flipped, axis=1)
+                                initial_x = int(np_pipe.shape[1]*0.05)
+                                final_x = int(np_pipe.shape[1]*0.05 + PIXEL_CM_RATIO)
+                                initial_y = int(np_pipe.shape[0]*0.95)
+                                final_y = int(np_pipe.shape[0]*0.95 + 10)
 
-                    ### Create the diameter rim mask
-                    empty_mask[0:5, :] = 1
+                                np_pipe[initial_y:final_y, initial_x:final_x] = 1
 
-                    ### Remove the diameter rim mask outside the profile and the first pixel mask
-                    empty_mask = np.flip(empty_mask, axis=1)
+                                res_2 = Image.fromarray(np_pipe)
 
-                    for i, j in first_pixel:
-                        empty_mask[i, :j] = 0
+                            draw = ImageDraw.Draw(res_2)
+                            font = ImageFont.load_default(100)
 
-                    empty_mask = np.flip(empty_mask, axis=1)
-                    for i, j in first_pixel:
-                        empty_mask[i, :j] = 0
+                            pos = pos_inv_func(inv_position, res_2, border)
 
-                    ### Create the symmetry mask
-                    empty_mask[:, empty_mask.shape[1] // 2: empty_mask.shape[1] // 2+5] = 1
+                            draw.text((pos), f"{df_info_tab.iloc[ids]['INV'].astype(int)}",
+                                    (0), font=font,
+                                    align="center")
 
-                    res = empty_mask.copy()
-                    res_2 = Image.fromarray(res * 255)
-                    res_2= res_2.convert("L")
-                    res_2 = ImageOps.invert(res_2)
-                    res_2 = ImageOps.expand(res_2, border=200, fill='white')
+                        inv_number = df_info_tab.iloc[ids]['INV'].astype(int)
+                        res_2.save(f"processed_imgs/{inv_number}.jpg")
+                        logging.info(f"Saved processed image for INV {inv_number}")
 
-                    ### Add a bar
-                    if add_bar:
-                        np_pipe = np.array(res_2)
-                    
-                        initial_x = int(np_pipe.shape[1]*0.05)
-                        final_x = int(np_pipe.shape[1]*0.05 + PIXEL_CM_RATIO)
+                    except Exception as e:
+                        logging.error(f"Error processing mask {ids+1} for image {img_name}, INV {df_info_tab.iloc[ids]['INV'].astype(int)}: {str(e)}")
+                        continue
 
-                        initial_y = int(np_pipe.shape[0]*0.95)
-                        final_y = int(np_pipe.shape[0]*0.95 + 10)
+            else:
+                logging.warning(f"Error in image {img_name}: number of masks does not match the number of rows in the tabular file. The image will be skipped.")
 
-                        np_pipe[initial_y:final_y, initial_x:final_x] = 1
-                        res_2 = Image.fromarray(np_pipe)
+        except Exception as e:
+            logging.error(f"Error processing image {img}: {str(e)}")
+            continue
 
-
-                    ### Add a title to the image with the INV number a the bottom of the image
-                    draw = ImageDraw.Draw(res_2)
-
-
-                    font = ImageFont.truetype("arial.ttf", 100)
-                    draw.text((25, 10), f"{df_info_tab.iloc[ids]['INV'].astype(int)}", 
-                              (0), font=font,
-                              align="center")
-
-
-                    res_2.save(f"processed_imgs/{df_info_tab.iloc[ids]['INV'].astype(int)}.jpg")
-                    
-                else:
-
-                    res_2 = Image.fromarray(mask * 255)
-                    res_2= res_2.convert("L")
-                    res_2 = ImageOps.invert(res_2)      
-                    res_2 = ImageOps.expand(res_2, border=200, fill='white')
-                    ### add a bar
-                    if add_bar:
-                        np_pipe = np.array(res_2)
-                    
-                        initial_x = int(np_pipe.shape[1]*0.05)
-                        final_x = int(np_pipe.shape[1]*0.05 + PIXEL_CM_RATIO)
-                        initial_y = int(np_pipe.shape[0]*0.95)
-                        final_y = int(np_pipe.shape[0]*0.95 + 10)
-
-                        np_pipe[initial_y:final_y, initial_x:final_x] = 1
-
-                        res_2 = Image.fromarray(np_pipe)
-                        
-                    draw = ImageDraw.Draw(res_2)
-                    font = ImageFont.truetype("arial.ttf", 100)
-                    draw.text((25, 10), f"{df_info_tab.iloc[ids]['INV'].astype(int)}", 
-                              (0), font=font,
-                              align="center")                                               
-                    res_2.save(f"processed_imgs/{df_info_tab.iloc[ids]['INV'].astype(int)}.jpg")
-            
-        else:
-            print(f"Error in image {img_name}: number of masks does not match the number of rows in the tabular file. The image will be skipped.")
-                
     return processed_imgs
-

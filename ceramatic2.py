@@ -15,6 +15,7 @@ def main():
     parser.add_argument("--PIXEL_CM_RATIO", type=float, default=118.11, help="Pixel to cm ratio")
     parser.add_argument("--confidence_threshold", type=float, default=0.8, help="Confidence threshold for predictions")
     parser.add_argument("--median_filter", type=int, default=41, help="Size of the median filter")
+    parser.add_argument("--inv_position", type=int, default=1, help="Position of the inventory number")
     parser.add_argument("--diagnostic", action="store_true", help="Enable diagnostic mode. Only process 5 images")
     parser.add_argument("--diagnostic_plots", action="store_true", help="Enable diagnostic plots. Display predictions")
     parser.add_argument("--add_bar", action="store_true", help="Add bar to the output")
@@ -37,9 +38,11 @@ def main():
         PIXEL_CM_RATIO=args.PIXEL_CM_RATIO,
         confidence_threshold=args.confidence_threshold,
         median_filter=args.median_filter,
+        inv_position=args.inv_position,
         diagnostic=args.diagnostic,
         diagnostic_plots=args.diagnostic_plots,
         add_bar=args.add_bar
+
     )
 
     print(f"Processed {len(processed_images)} images.")
