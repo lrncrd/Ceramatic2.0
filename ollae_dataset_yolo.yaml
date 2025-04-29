@@ -1,0 +1,6 @@
+path: /content/drive/MyDrive/datasets/ollae  # dataset root dir
+train: train  # train images (relative to 'path') 4 images
+val: val # val images (relative to 'path') 4 images
+
+names:
+  0: Profile

@@ -12,7 +12,7 @@ You can find the weights of the model [here](https://drive.google.com/file/d/1b2
 To run the code on the provided example images, you can use the following command:
 
 ```bash
-python ceramatic2.py --model_path "Ceramatic_model_V1.pt" --imgs_dir "demo/example_imgs" --tabular_file "demo/metadata_example.xlsx" --diagnostic --diagnostic_plots --add_bar --install_requirements
+python ceramatic2.py --model_path "Ceramatic_model_V1.pt" --imgs_dir "demo/example_imgs" --tabular_file "demo/metadata_example.xlsx"  --diagnostic_plots --add_bar --install_requirements
 ```
 
 ## TO DO
