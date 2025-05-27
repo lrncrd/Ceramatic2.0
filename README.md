@@ -214,10 +214,9 @@ This project is licensed under the Apache 2.0 License - see the LICENSE file for
 ## 👥 Contributors
 
 
-<a href="https://github.com/lrncrd">
-  <img src="https://github.com/lrncrd.png" width="50px" alt="Lorenzo Cardarelli" style="border-radius: 50%"/>
-  [Lorenzo Cardarelli](https://github.com/lrncrd)
-
+<a href="https://github.com/lrncrd/Ceramatic2.0/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=lrncrd/Ceramatic2.0" />
+</a>
 
 ---
 
