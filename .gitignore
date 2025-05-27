@@ -176,3 +176,8 @@ processed_imgs/*
 
 ## xlsx
 #*.xlsx
+
+# specific files
+
+utils_legacy.py
+
