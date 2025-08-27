@@ -72,7 +72,22 @@ class ImageProcessor:
     def _load_model(self) -> None:
         """Load the YOLO model if not already loaded."""
         if self.model is None:
+            print(f"Loading YOLO model from: {self.model_path}")
+            import torch
+            
+            # Detect available device
+            if torch.cuda.is_available():
+                device = 'cuda'
+                print(f"Using CUDA GPU: {torch.cuda.get_device_name(0)}")
+            elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+                device = 'mps'
+                print("Using Apple Silicon GPU (MPS)")
+            else:
+                device = 'cpu'
+                print("Using CPU (this will be slower)")
+            
             self.model = YOLO(self.model_path, task='segment')
+            self.device = device
     
     def _load_tabular_data(self, tabular_file: Path) -> pd.DataFrame:
         """
@@ -122,14 +137,34 @@ class ImageProcessor:
         Returns:
             Tuple of (results, masks_array, result_array)
         """
-        results = self.model.predict(
-            img, 
-            save_crop=False, 
-            conf=confidence_threshold, 
-            retina_masks=True, 
-            verbose=False, 
-            imgsz=1024
-        )
+        print(f"Starting YOLO prediction with confidence={confidence_threshold}, image size={img.size}")
+        import time
+        start_time = time.time()
+        
+        try:
+            results = self.model.predict(
+                img, 
+                save_crop=False, 
+                conf=confidence_threshold, 
+                retina_masks=True, 
+                verbose=True,  # Changed to True for debugging
+                imgsz=1024,
+                device=self.device if hasattr(self, 'device') else None
+            )
+            
+            elapsed = time.time() - start_time
+            print(f"YOLO prediction completed in {elapsed:.2f} seconds")
+            
+            if results and len(results) > 0 and results[0].masks:
+                print(f"Found {len(results[0].masks.data)} pottery pieces")
+            else:
+                print("No pottery pieces detected in image")
+                
+        except Exception as e:
+            print(f"ERROR in YOLO prediction: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            raise
         
         result_array = results[0].plot(masks=True)
         extracted_masks = results[0].masks.data
@@ -603,12 +638,22 @@ class ImageProcessor:
         Returns:
             True if valid, False otherwise
         """
+        import numpy as np
+        import pandas as pd
+        
+        # Check for NaN or None
+        if pd.isna(diameter) or diameter is None:
+            print(f"Error in image {img_name}: diameter is NaN or None. The image will be skipped.")
+            return False
+            
+        # Check for empty strings
         if isinstance(diameter, str) and diameter.isspace():
             print(f"Error in image {img_name}: diameter is a space. The image will be skipped.")
             return False
         
-        if not isinstance(diameter, (int, float)):
-            print(f"Error in image {img_name}: diameter is not a number. The image will be skipped.")
+        # Accept Python int/float and numpy numeric types
+        if not isinstance(diameter, (int, float, np.integer, np.floating)):
+            print(f"Error in image {img_name}: diameter is not a number (type: {type(diameter)}). The image will be skipped.")
             return False
         
         return True
@@ -884,8 +929,8 @@ if __name__ == "__main__":
     # Example usage
     processor = ImageProcessor(model_path="Ceramatic_model_V1.pt")
     results = processor.process_images(
-        imgs_dir="eccoli\imgs",
-        tabular_file="eccoli\metadata_example.xlsx",
+        imgs_dir="eccoli/imgs",
+        tabular_file="eccoli/metadata_example.xlsx",
         confidence_threshold=0.8,
         diagnostic=True,
         diagnostic_plots=True,
