@@ -629,7 +629,24 @@ class CeramaticGradioApp:
                     with gr.Row():
                         with gr.Column(scale=1):
                             gr.Markdown("### Dataset Setup")
+                            
+                            # Add button to open label generator
+                            with gr.Row():
+                                gr.Markdown("Need to create labels first?")
+                                open_label_gen_btn = gr.Button(
+                                    "🏷️ Open Label Generator",
+                                    variant="secondary",
+                                    size="sm"
+                                )
+                            
                             with gr.Group():
+                                dataset_yaml = gr.Textbox(
+                                    label="Dataset YAML Path",
+                                    placeholder="/path/to/dataset.yaml",
+                                    info="Path to YOLO dataset configuration file"
+                                )
+                                
+                                gr.Markdown("*Or upload files manually:*")
                                 train_images = gr.File(
                                     label="Training Images",
                                     file_count="multiple",
@@ -935,9 +952,31 @@ class CeramaticGradioApp:
                 outputs=[pca_plot, pca_table, pca_report, pca_info]
             )
             
+            # Function to open label generator
+            def open_label_generator():
+                """Launch label generator GUI in a new process"""
+                import subprocess
+                import sys
+                
+                try:
+                    # Launch the label generator GUI
+                    subprocess.Popen([
+                        sys.executable, 
+                        "label_generator_gui.py"
+                    ])
+                    return "✅ Label Generator opened in a new window"
+                except Exception as e:
+                    return f"❌ Error opening Label Generator: {str(e)}"
+            
+            # Wire up label generator button
+            open_label_gen_btn.click(
+                fn=open_label_generator,
+                outputs=gr.Textbox(visible=False)  # Hidden output for status
+            )
+            
             # Training handler
             def train_model_live(
-                train_imgs, train_lbls, val_imgs, val_lbls,
+                dataset_yaml, train_imgs, train_lbls, val_imgs, val_lbls,
                 epochs, batch_size, lr, 
                 progress=gr.Progress()
             ):
@@ -949,68 +988,104 @@ class CeramaticGradioApp:
                     
                     progress(0, desc="Preparing dataset...")
                     
-                    # Create temp directory
-                    temp_dir = self.create_temp_dir()
-                    dataset_dir = os.path.join(temp_dir, "dataset")
-                    
-                    # Create directory structure
-                    for split in ['train', 'val']:
-                        os.makedirs(os.path.join(dataset_dir, 'images', split), exist_ok=True)
-                        os.makedirs(os.path.join(dataset_dir, 'labels', split), exist_ok=True)
-                    
-                    # Copy files
                     console_output = "=== CERAMATIC 2.0 TRAINING ===\n\n"
                     
-                    # Training images
-                    if train_imgs:
-                        console_output += f"📁 Loading {len(train_imgs)} training images...\n"
-                        for i, img in enumerate(train_imgs):
-                            src = img.name if hasattr(img, 'name') else img
-                            dst = os.path.join(dataset_dir, 'images', 'train', os.path.basename(src))
-                            shutil.copy(src, dst)
+                    # Initialize temp_dir for all cases
+                    temp_dir = self.create_temp_dir()
                     
-                    # Training labels
-                    if train_lbls:
-                        console_output += f"📋 Loading {len(train_lbls)} training labels...\n"
-                        for i, lbl in enumerate(train_lbls):
-                            src = lbl.name if hasattr(lbl, 'name') else lbl
-                            dst = os.path.join(dataset_dir, 'labels', 'train', os.path.basename(src))
-                            shutil.copy(src, dst)
-                    
-                    # Validation images
-                    if val_imgs:
-                        console_output += f"📁 Loading {len(val_imgs)} validation images...\n"
-                        for i, img in enumerate(val_imgs):
-                            src = img.name if hasattr(img, 'name') else img
-                            dst = os.path.join(dataset_dir, 'images', 'val', os.path.basename(src))
-                            shutil.copy(src, dst)
-                    
-                    # Validation labels
-                    if val_lbls:
-                        console_output += f"📋 Loading {len(val_lbls)} validation labels...\n"
-                        for i, lbl in enumerate(val_lbls):
-                            src = lbl.name if hasattr(lbl, 'name') else lbl
-                            dst = os.path.join(dataset_dir, 'labels', 'val', os.path.basename(src))
-                            shutil.copy(src, dst)
-                    
-                    # Create dataset YAML
-                    yaml_content = {
-                        'train': os.path.join(dataset_dir, 'images', 'train'),
-                        'val': os.path.join(dataset_dir, 'images', 'val'),
-                        'nc': 1,
-                        'names': ['pottery']
-                    }
-                    yaml_path = os.path.join(dataset_dir, 'dataset.yaml')
-                    with open(yaml_path, 'w') as f:
-                        yaml.dump(yaml_content, f)
-                    
-                    console_output += f"\n✅ Dataset prepared!\n"
-                    console_output += f"📊 Training: {len(train_imgs) if train_imgs else 0} images\n"
-                    console_output += f"📊 Validation: {len(val_imgs) if val_imgs else 0} images\n"
+                    # Check if using dataset YAML or manual files
+                    if dataset_yaml and os.path.exists(dataset_yaml):
+                        console_output += f"📁 Using dataset: {dataset_yaml}\n"
+                        yaml_path = dataset_yaml
+                        
+                        # Read dataset info
+                        import yaml
+                        with open(yaml_path, 'r') as f:
+                            data = yaml.safe_load(f)
+                        
+                        # Count images if possible
+                        try:
+                            train_path = data.get('train', '')
+                            val_path = data.get('val', '')
+                            
+                            # Handle relative paths
+                            yaml_dir = os.path.dirname(yaml_path)
+                            if not os.path.isabs(train_path):
+                                train_path = os.path.join(yaml_dir, train_path)
+                            if not os.path.isabs(val_path):
+                                val_path = os.path.join(yaml_dir, val_path)
+                            
+                            train_count = len([f for f in os.listdir(train_path) if f.endswith(('.jpg', '.png'))]) if os.path.exists(train_path) else 0
+                            val_count = len([f for f in os.listdir(val_path) if f.endswith(('.jpg', '.png'))]) if os.path.exists(val_path) else 0
+                            
+                            console_output += f"✅ Dataset loaded successfully\n"
+                            console_output += f"📊 Training images: {train_count}\n"
+                            console_output += f"📊 Validation images: {val_count}\n\n"
+                        except:
+                            console_output += f"✅ Dataset loaded successfully\n\n"
+                    else:
+                        # Create dataset from manual files
+                        dataset_dir = os.path.join(temp_dir, "dataset")
+                        
+                        # Create directory structure
+                        for split in ['train', 'val']:
+                            os.makedirs(os.path.join(dataset_dir, 'images', split), exist_ok=True)
+                            os.makedirs(os.path.join(dataset_dir, 'labels', split), exist_ok=True)
+                        
+                        # Only process manual files if no yaml provided
+                        # Training images
+                        if train_imgs:
+                            console_output += f"📁 Loading {len(train_imgs)} training images...\n"
+                            for i, img in enumerate(train_imgs):
+                                src = img.name if hasattr(img, 'name') else img
+                                dst = os.path.join(dataset_dir, 'images', 'train', os.path.basename(src))
+                                shutil.copy(src, dst)
+                        
+                        # Training labels
+                        if train_lbls:
+                            console_output += f"📋 Loading {len(train_lbls)} training labels...\n"
+                            for i, lbl in enumerate(train_lbls):
+                                src = lbl.name if hasattr(lbl, 'name') else lbl
+                                dst = os.path.join(dataset_dir, 'labels', 'train', os.path.basename(src))
+                                shutil.copy(src, dst)
+                        
+                        # Validation images
+                        if val_imgs:
+                            console_output += f"📁 Loading {len(val_imgs)} validation images...\n"
+                            for i, img in enumerate(val_imgs):
+                                src = img.name if hasattr(img, 'name') else img
+                                dst = os.path.join(dataset_dir, 'images', 'val', os.path.basename(src))
+                                shutil.copy(src, dst)
+                        
+                        # Validation labels
+                        if val_lbls:
+                            console_output += f"📋 Loading {len(val_lbls)} validation labels...\n"
+                            for i, lbl in enumerate(val_lbls):
+                                src = lbl.name if hasattr(lbl, 'name') else lbl
+                                dst = os.path.join(dataset_dir, 'labels', 'val', os.path.basename(src))
+                                shutil.copy(src, dst)
+                        
+                        # Create dataset YAML
+                        yaml_content = {
+                            'train': os.path.join(dataset_dir, 'images', 'train'),
+                            'val': os.path.join(dataset_dir, 'images', 'val'),
+                            'nc': 1,
+                            'names': ['pottery']
+                        }
+                        yaml_path = os.path.join(dataset_dir, 'dataset.yaml')
+                        with open(yaml_path, 'w') as f:
+                            yaml.dump(yaml_content, f)
+                        
+                        console_output += f"\n✅ Dataset prepared!\n"
+                        console_output += f"📊 Training: {len(train_imgs) if train_imgs else 0} images\n"
+                        console_output += f"📊 Validation: {len(val_imgs) if val_imgs else 0} images\n"
+                    # Configuration summary
                     console_output += f"\n⚙️ Configuration:\n"
                     console_output += f"   - Epochs: {epochs}\n"
                     console_output += f"   - Batch Size: {batch_size}\n"
                     console_output += f"   - Learning Rate: {lr}\n"
+                    console_output += f"   - Model: YOLOv8n-seg\n"
+                    console_output += f"   - Image Size: 640x640\n"
                     console_output += f"\n🚀 Starting training...\n\n"
                     
                     yield console_output, None, None
@@ -1103,7 +1178,7 @@ print("\\n✅ Training complete!")
             # Wire up training button
             train_btn.click(
                 fn=train_model_live,
-                inputs=[train_images, train_labels, val_images, val_labels,
+                inputs=[dataset_yaml, train_images, train_labels, val_images, val_labels,
                         epochs, batch_size, learning_rate],
                 outputs=[training_console, training_plot, model_download]
             )
