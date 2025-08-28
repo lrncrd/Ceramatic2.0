@@ -181,3 +181,5 @@ processed_imgs/*
 
 utils_legacy.py
 
+/processed_imgs/
+/statistical_analysis/
