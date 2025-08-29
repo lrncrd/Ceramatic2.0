@@ -49,37 +49,37 @@ python ceramatic2.py --model_path "Ceramatic_model_V1.pt" --imgs_dir "demo/examp
 ## 📋 Command Line Arguments
 
 ### Required Arguments
-| Argument | Type | Default | Description |
-|----------|------|---------|-------------|
-| `--model_path` | `str` | `"Ceramatic_model_V1.pt"` | Path to the YOLO model file |
-| `--imgs_dir` | `str` | `"demo/example_imgs"` | Directory containing ceramic images |
-| `--tabular_file` | `str` | `"demo/metadata_example.xlsx"` | Path to the metadata Excel file |
+| Argument         | Type  | Default                        | Description                         |
+|------------------|-------|--------------------------------|-------------------------------------|
+| `--model_path`   | `str` | `"Ceramatic_model_V1.pt"`      | Path to the YOLO model file         |
+| `--imgs_dir`     | `str` | `"demo/example_imgs"`          | Directory containing ceramic images |
+| `--tabular_file` | `str` | `"demo/metadata_example.xlsx"` | Path to the metadata Excel file     |
 
 ### Processing Parameters
-| Argument | Type | Default | Description |
-|----------|------|---------|-------------|
-| `--PIXEL_CM_RATIO` | `float` | `118.11` | Pixel to centimeter conversion ratio |
-| `--confidence_threshold` | `float` | `0.8` | YOLO model confidence threshold (0.0-1.0) |
-| `--median_filter` | `int` | `41` | Size of median blur filter for noise reduction |
+| Argument                 | Type    | Default  | Description                                    |
+|--------------------------|---------|----------|------------------------------------------------|
+| `--PIXEL_CM_RATIO`       | `float` | `118.11` | Pixel to centimeter conversion ratio           |
+| `--confidence_threshold` | `float` | `0.8`    | YOLO model confidence threshold (0.0-1.0)      |
+| `--median_filter`        | `int`   | `41`     | Size of median blur filter for noise reduction |
 
 ### Visual Style Options
-| Argument | Type | Default | Choices | Description |
-|----------|------|---------|---------|-------------|
-| `--inv_position` | `str` | `"bottom_center"` | `top_left`, `top_center`, `top_right`, `bottom_left`, `bottom_center`, `bottom_right` | Position of inventory number |
-| `--profile_style` | `str` | `"filled"` | `filled` | Pottery profile rendering style |
-| `--scale_bar_style` | `str` | `"striped"` | `striped`, `solid` | Scale bar appearance |
-| `--scale_cm` | `float` | `3.0` | - | Length of scale bar in centimeters |
-| `--num_segments` | `int` | `3` | - | Number of segments in striped scale bar |
+| Argument            | Type    | Default           | Choices                                                                               | Description                             |
+|---------------------|---------|-------------------|---------------------------------------------------------------------------------------|-----------------------------------------|
+| `--inv_position`    | `str`   | `"bottom_center"` | `top_left`, `top_center`, `top_right`, `bottom_left`, `bottom_center`, `bottom_right` | Position of inventory number            |
+| `--profile_style`   | `str`   | `"filled"`        | `filled`                                                                              | Pottery profile rendering style         |
+| `--scale_bar_style` | `str`   | `"striped"`       | `striped`, `solid`                                                                    | Scale bar appearance                    |
+| `--scale_cm`        | `float` | `3.0`             | -                                                                                     | Length of scale bar in centimeters      |
+| `--num_segments`    | `int`   | `3`               | -                                                                                     | Number of segments in striped scale bar |
 
 ### Feature Flags
-| Argument | Description |
-|----------|-------------|
-| `--diagnostic` | Process only first 5 images for testing |
-| `--diagnostic_plots` | Save intermediate processing plots |
-| `--add_bar` | Include scale bar in output images |
-| `--add_diameter` | Add diameter measurement line |
-| `--add_scale_cm` | Display scale measurements on scale bar |
-| `--install_requirements` | Auto-install Python dependencies |
+| Argument                 | Description                             |
+|--------------------------|-----------------------------------------|
+| `--diagnostic`           | Process only first 5 images for testing |
+| `--diagnostic_plots`     | Save intermediate processing plots      |
+| `--add_bar`              | Include scale bar in output images      |
+| `--add_diameter`         | Add diameter measurement line           |
+| `--add_scale_cm`         | Display scale measurements on scale bar |
+| `--install_requirements` | Auto-install Python dependencies        |
 
 ## 💡 Usage Examples
 
@@ -120,12 +120,12 @@ imgs_dir/
 ### Metadata File Format
 The tabular file should be an spreadsheet (`.xlsx`; `.xls`; `.csv`) file structured with the following columns:
 
-| Column Name | Description |
-|-------------|-------------|
-|TAV | File's filename (without path or file extension) |
-| INV | Inventory ID (unique identifier for each pottery piece - *see below*) |
-| DIAM | Diameter measurement (optional - *NaN* for no diameter) |
-| FLIP | Indicate if the profile need to be flipped (1) or not (0) |
+| Column Name | Description                                                           |
+|-------------|-----------------------------------------------------------------------|
+| TAV         | File's filename (without path or file extension)                      |
+| INV         | Inventory ID (unique identifier for each pottery piece - *see below*) |
+| DIAM        | Diameter measurement (optional - *NaN* for no diameter)               |
+| FLIP        | Indicate if the profile need to be flipped (1) or not (0)             |
 
 > ⚠️ **Important**: As you can see in the `demo/metadata_example.xlsx`, INV placement needs to follow the order **left to right** in the scanned table. 
 
@@ -147,20 +147,48 @@ Ceramatic 2.0 generates:
 - [x] Cross-platform compatibility (Windows, macOS, Linux)
 - [x] Graphic scale styles enhancement
 
+### Completed Features ✅
+
+- [x] Profile style improvements (filled/outline/dotted variants)
+- [x] Basic statistical plotting (PCA analysis)
+- [x] Continuation lines for fragmented pottery
+
 ### In Progress 🚧
 
-- [ ] Profile style improvements (filled/outline variants)
-- [ ] Basic statistical plotting (PCA analysis)
-- [ ] Continuation lines for fragmented pottery
 - [ ] Training using a newer YOLO version
+
+### TODO - Future Features 📋
+
+#### Typological Classification System
+- [ ] **Automatic typological classification** of pottery profiles
+  - [ ] Post-processing classification based on extracted morphological features
+  - [ ] Template matching with reference typological profiles
+  - [ ] Clustering algorithms for automatic grouping by similarity
+  - [ ] Deep learning classifier for profile-based typology assignment
+  
+- [ ] **Multi-class YOLO training** for direct typology detection
+  - [ ] Dataset annotation with pottery types (amphora, olla, plate, etc.)
+  - [ ] Retrain model with multiple pottery classes
+  
+- [ ] **Hybrid classification system** (recommended approach)
+  - [ ] YOLO for profile extraction + secondary classifier for typology
+  - [ ] Typological reference database integration
+  - [ ] Probability-based type assignment
+  - [ ] Typological grouping reports and visualizations
+  
+- [ ] **New "Typological Classification" interface tab**
+  - [ ] Upload reference profiles for each pottery type
+  - [ ] Automatic comparison and matching
+  - [ ] Confidence scores for type assignments
+  - [ ] Export typological analysis reports
 
 ## 📦 Version History
 
-| Version | Date | Changes |
-|---------|------|---------|
-| **1.1.0** | 27/05/2025 | 🎉 Major update<br>✅ Total code refactoring <br>✅ Enhanced scale bar styles and options <br> |
+| Version   | Date       | Changes                                                                                           |
+|-----------|------------|---------------------------------------------------------------------------------------------------|
+| **1.1.0** | 27/05/2025 | 🎉 Major update<br>✅ Total code refactoring <br>✅ Enhanced scale bar styles and options <br>      |
 | **1.0.1** | 17/10/2024 | ✅ Added inventory placement options<br>✅ Unix compatibility (Ubuntu 24.04 WSL/native, macOS 15.0) |
-| **1.0.0** | 14/10/2024 | 🎉 Initial release |
+| **1.0.0** | 14/10/2024 | 🎉 Initial release                                                                                |
 
 ## 🔧 Technical Requirements
 

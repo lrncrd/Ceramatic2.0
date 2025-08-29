@@ -17,7 +17,7 @@ def main():
     parser.add_argument("--confidence_threshold", type=float, default=0.8, help="YOLO confidence threshold")
     parser.add_argument("--median_filter", type=int, default=41, help="Size of the median blur filter")
     parser.add_argument("--inv_position", type=str, default="bottom_center", choices=[pos.value for pos in InventoryPosition], help="Position of the inventory number")
-    parser.add_argument("--profile_style", type=str, default="filled", choices=[style.value for style in ProfileStyle], help="Pottery profile rendering style")
+    parser.add_argument("--profile_style", type=str, default="filled", choices=[style.value for style in ProfileStyle], help="Pottery profile rendering style (filled, outline, filled_with_outline, dotted_outline)")
     parser.add_argument("--scale_bar_style", type=str, default="striped", choices=[style.value for style in ScaleBarStyle], help="Scale bar style")
     parser.add_argument("--scale_cm", type=float, default=3.0, help="Length of the scale bar in cm")
     parser.add_argument("--num_segments", type=int, default=3, help="Number of segments in the striped scale bar")
@@ -27,6 +27,8 @@ def main():
     parser.add_argument("--add_diameter", action="store_true", help="Add diameter line to images")
     parser.add_argument("--add_scale_cm", action="store_true", help="Display scale cm text on the scale bar")
     parser.add_argument("--install_requirements", action="store_true", help="Install requirements before running")
+    parser.add_argument("--perform_pca", action="store_true", help="Perform PCA analysis on processed pottery shapes")
+    parser.add_argument("--add_continuation_lines", action="store_true", help="Add continuation lines for fragmented pottery")
 
     args = parser.parse_args()
 
@@ -52,9 +54,16 @@ def main():
         num_segments=args.num_segments,
         add_diameter=args.add_diameter,
         median_filter=args.median_filter,
+        add_continuation_lines=args.add_continuation_lines,
     )
 
     print(f"✅ Processed {len(processed_images)} image(s).")
+    
+    # Perform PCA analysis if requested
+    if args.perform_pca and len(processed_images) >= 3:
+        print("\n📊 Performing PCA analysis...")
+        processor.perform_pca_analysis(processed_images)
+        print("✅ PCA analysis complete. Check 'statistical_analysis' folder for results.")
 
 
 if __name__ == "__main__":

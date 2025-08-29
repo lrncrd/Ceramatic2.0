@@ -1,6 +1,6 @@
 from pathlib import Path
 import os
-from typing import List, Tuple, Optional, Union, Literal
+from typing import List, Tuple, Optional, Union, Literal, Dict
 from enum import Enum
 import numpy as np
 from skimage import morphology
@@ -12,9 +12,14 @@ import pandas as pd
 from tqdm import tqdm
 from PIL import Image, ImageFilter, ImageOps, ImageDraw, ImageFont
 import matplotlib.pyplot as plt
+import plotly.graph_objects as go
+import plotly.express as px
+from plotly.subplots import make_subplots
 from skimage.morphology import remove_small_objects
 from skimage import measure
 from scipy.ndimage import binary_dilation
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
 import warnings
 
 warnings.filterwarnings("ignore")
@@ -24,6 +29,7 @@ class ScaleBarStyle(Enum):
     """Enumeration for different scale bar styles."""
     SIMPLE = "simple"
     STRIPED = "striped"
+    SOLID = "solid"
 
         
     
@@ -32,6 +38,9 @@ class ScaleBarStyle(Enum):
 class ProfileStyle(Enum):
     """Enumeration for different profile rendering styles."""
     FILLED = "filled"
+    OUTLINE = "outline"
+    FILLED_WITH_OUTLINE = "filled_with_outline"
+    DOTTED_OUTLINE = "dotted_outline"
 
 
 
@@ -72,7 +81,22 @@ class ImageProcessor:
     def _load_model(self) -> None:
         """Load the YOLO model if not already loaded."""
         if self.model is None:
+            print(f"Loading YOLO model from: {self.model_path}")
+            import torch
+            
+            # Detect available device
+            if torch.cuda.is_available():
+                device = 'cuda'
+                print(f"Using CUDA GPU: {torch.cuda.get_device_name(0)}")
+            elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+                device = 'mps'
+                print("Using Apple Silicon GPU (MPS)")
+            else:
+                device = 'cpu'
+                print("Using CPU (this will be slower)")
+            
             self.model = YOLO(self.model_path, task='segment')
+            self.device = device
     
     def _load_tabular_data(self, tabular_file: Path) -> pd.DataFrame:
         """
@@ -122,14 +146,34 @@ class ImageProcessor:
         Returns:
             Tuple of (results, masks_array, result_array)
         """
-        results = self.model.predict(
-            img, 
-            save_crop=False, 
-            conf=confidence_threshold, 
-            retina_masks=True, 
-            verbose=False, 
-            imgsz=1024
-        )
+        print(f"Starting YOLO prediction with confidence={confidence_threshold}, image size={img.size}")
+        import time
+        start_time = time.time()
+        
+        try:
+            results = self.model.predict(
+                img, 
+                save_crop=False, 
+                conf=confidence_threshold, 
+                retina_masks=True, 
+                verbose=True,  # Changed to True for debugging
+                imgsz=1024,
+                device=self.device if hasattr(self, 'device') else None
+            )
+            
+            elapsed = time.time() - start_time
+            print(f"YOLO prediction completed in {elapsed:.2f} seconds")
+            
+            if results and len(results) > 0 and results[0].masks:
+                print(f"Found {len(results[0].masks.data)} pottery pieces")
+            else:
+                print("No pottery pieces detected in image")
+                
+        except Exception as e:
+            print(f"ERROR in YOLO prediction: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            raise
         
         result_array = results[0].plot(masks=True)
         extracted_masks = results[0].masks.data
@@ -363,7 +407,41 @@ class ImageProcessor:
         if style == ProfileStyle.FILLED:
             return mask
         
-        ### to add other styles in the future
+        elif style == ProfileStyle.OUTLINE:
+            # Create outline by finding edges
+            from scipy import ndimage
+            # Dilate and subtract original to get outline
+            dilated = ndimage.binary_dilation(mask, iterations=2)
+            outline = dilated.astype(int) - mask.astype(int)
+            return outline.astype(bool)
+        
+        elif style == ProfileStyle.FILLED_WITH_OUTLINE:
+            # Combine filled and outline
+            from scipy import ndimage
+            # Create thicker outline
+            dilated = ndimage.binary_dilation(mask, iterations=3)
+            outline = dilated.astype(int) - mask.astype(int)
+            # Combine with original filled mask
+            combined = np.logical_or(mask, outline)
+            # Make outline darker by creating a weighted mask
+            result = mask.astype(float)
+            result[outline.astype(bool)] = 0.5  # Gray outline
+            return result
+        
+        elif style == ProfileStyle.DOTTED_OUTLINE:
+            # Create dotted outline effect
+            from scipy import ndimage
+            # Get outline
+            dilated = ndimage.binary_dilation(mask, iterations=2)
+            outline = dilated.astype(int) - mask.astype(int)
+            
+            # Create dotted pattern
+            y_coords, x_coords = np.where(outline)
+            dotted = np.zeros_like(outline)
+            # Keep every nth pixel for dotted effect
+            for i in range(0, len(y_coords), 3):
+                dotted[y_coords[i], x_coords[i]] = 1
+            return dotted.astype(bool)
         
         return mask
     
@@ -393,6 +471,17 @@ class ImageProcessor:
             # Simple black bar
             bar_thickness = 8
             np_img[bar_y:bar_y + bar_thickness, bar_start_x:bar_end_x] = 0
+            
+        elif style == ScaleBarStyle.SOLID:
+            # Solid bar with border
+            bar_thickness = 10
+            # Draw border
+            np_img[bar_y-1:bar_y+bar_thickness+1, bar_start_x-1:bar_end_x+1] = 0
+            # Fill with white
+            np_img[bar_y:bar_y+bar_thickness, bar_start_x:bar_end_x] = 255
+            # Add black edges
+            np_img[bar_y:bar_y+bar_thickness, bar_start_x:bar_start_x+2] = 0
+            np_img[bar_y:bar_y+bar_thickness, bar_end_x-2:bar_end_x] = 0
 
             
         elif style == ScaleBarStyle.STRIPED:
@@ -562,8 +651,14 @@ class ImageProcessor:
         # Apply profile style
         styled_mask = self._apply_profile_style(mask, profile_style)
         
-        # Convert to PIL and invert
-        img = Image.fromarray((styled_mask * 255).astype(np.uint8))
+        # Convert to PIL and handle different mask types
+        if styled_mask.dtype == np.float64 or styled_mask.dtype == np.float32:
+            # Handle masks with grayscale values (e.g., filled_with_outline)
+            img = Image.fromarray((styled_mask * 255).astype(np.uint8))
+        else:
+            # Handle boolean masks
+            img = Image.fromarray((styled_mask * 255).astype(np.uint8))
+        
         img = img.convert("L")
         img = ImageOps.invert(img)
         img = ImageOps.expand(img, border=200, fill='white')
@@ -603,12 +698,22 @@ class ImageProcessor:
         Returns:
             True if valid, False otherwise
         """
+        import numpy as np
+        import pandas as pd
+        
+        # Check for NaN or None
+        if pd.isna(diameter) or diameter is None:
+            print(f"Error in image {img_name}: diameter is NaN or None. The image will be skipped.")
+            return False
+            
+        # Check for empty strings
         if isinstance(diameter, str) and diameter.isspace():
             print(f"Error in image {img_name}: diameter is a space. The image will be skipped.")
             return False
         
-        if not isinstance(diameter, (int, float)):
-            print(f"Error in image {img_name}: diameter is not a number. The image will be skipped.")
+        # Accept Python int/float and numpy numeric types
+        if not isinstance(diameter, (int, float, np.integer, np.floating)):
+            print(f"Error in image {img_name}: diameter is not a number (type: {type(diameter)}). The image will be skipped.")
             return False
         
         return True
@@ -626,6 +731,7 @@ class ImageProcessor:
                     scale_cm: float = 1.0,
                     add_diameter: bool = True,
                     median_filter: int = 41,
+                    add_continuation_lines: bool = False,
                     ) -> List[Tuple[str, int, np.ndarray]]:
         """
         Process images using YOLO segmentation and create reconstructed pottery profiles.
@@ -817,6 +923,13 @@ class ImageProcessor:
                             else:
                                 final_mask = mask_region
                             
+                            # Add continuation lines if requested and fragments detected
+                            if add_continuation_lines:
+                                fragments = self.detect_fragments(final_mask)
+                                if len(fragments) > 1:
+                                    print(f"  Detected {len(fragments)} fragments, adding continuation lines")
+                                    final_mask = self.add_continuation_lines(final_mask)
+                            
                             # Create final image with all styling parameters
                             inv_number = int(row_data['INV'])
                             final_img = self._create_final_image(
@@ -855,6 +968,338 @@ class ImageProcessor:
         print(f"\nProcessing complete. Successfully processed {len(processed_imgs)} items.")
         return processed_imgs
     
+    def extract_shape_features(self, mask: np.ndarray) -> Dict[str, float]:
+        """
+        Extract shape features from a pottery mask for statistical analysis.
+        
+        Args:
+            mask: Binary mask of pottery profile
+            
+        Returns:
+            Dictionary of shape features
+        """
+        from skimage import measure
+        import cv2
+        
+        # Ensure mask is binary
+        mask = mask.astype(bool)
+        
+        # Get basic properties
+        props = measure.regionprops(mask.astype(int))[0]
+        
+        # Find contour for more advanced features
+        contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if contours:
+            contour = max(contours, key=cv2.contourArea)
+            
+            # Fit ellipse if possible
+            if len(contour) >= 5:
+                ellipse = cv2.fitEllipse(contour)
+                major_axis = max(ellipse[1])
+                minor_axis = min(ellipse[1])
+            else:
+                major_axis = props.major_axis_length
+                minor_axis = props.minor_axis_length
+        else:
+            major_axis = props.major_axis_length
+            minor_axis = props.minor_axis_length
+        
+        # Calculate features
+        features = {
+            'area': props.area,
+            'perimeter': props.perimeter,
+            'major_axis_length': major_axis,
+            'minor_axis_length': minor_axis,
+            'eccentricity': props.eccentricity,
+            'solidity': props.solidity,
+            'extent': props.extent,
+            'orientation': props.orientation,
+            'circularity': 4 * np.pi * props.area / (props.perimeter ** 2) if props.perimeter > 0 else 0,
+            'aspect_ratio': major_axis / minor_axis if minor_axis > 0 else 1,
+            'convex_area': props.convex_area,
+            'equivalent_diameter': props.equivalent_diameter,
+        }
+        
+        # Add height and width
+        bbox = props.bbox
+        features['height'] = bbox[2] - bbox[0]
+        features['width'] = bbox[3] - bbox[1]
+        features['height_width_ratio'] = features['height'] / features['width'] if features['width'] > 0 else 1
+        
+        return features
+    
+    def perform_pca_analysis(self, processed_images: List[Tuple[str, int, np.ndarray]], 
+                           save_plot: bool = True, output_dir: str = "statistical_analysis") -> Tuple[np.ndarray, pd.DataFrame]:
+        """
+        Perform PCA analysis on processed pottery images.
+        
+        Args:
+            processed_images: List of tuples (image_name, inv_number, mask)
+            save_plot: Whether to save PCA plot
+            output_dir: Directory to save analysis results
+            
+        Returns:
+            Tuple of (transformed_data, features_df)
+        """
+        if len(processed_images) < 3:
+            print("Warning: PCA requires at least 3 samples. Skipping analysis.")
+            return None, None
+        
+        # Extract features for all images
+        feature_list = []
+        inv_numbers = []
+        
+        for img_name, inv_num, mask in processed_images:
+            try:
+                features = self.extract_shape_features(mask)
+                feature_list.append(list(features.values()))
+                inv_numbers.append(inv_num)
+            except Exception as e:
+                print(f"Error extracting features for {img_name}: {e}")
+                continue
+        
+        if len(feature_list) < 3:
+            print("Not enough valid samples for PCA.")
+            return None, None
+        
+        # Create feature matrix
+        feature_names = list(self.extract_shape_features(processed_images[0][2]).keys())
+        X = np.array(feature_list)
+        
+        # Standardize features
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X)
+        
+        # Perform PCA
+        pca = PCA(n_components=min(2, len(feature_list)))
+        X_pca = pca.fit_transform(X_scaled)
+        
+        # Create DataFrame with results
+        features_df = pd.DataFrame(X, columns=feature_names)
+        features_df['inv_number'] = inv_numbers
+        features_df['PC1'] = X_pca[:, 0]
+        if X_pca.shape[1] > 1:
+            features_df['PC2'] = X_pca[:, 1]
+        
+        # Save plot if requested
+        if save_plot:
+            os.makedirs(output_dir, exist_ok=True)
+            
+            # Create interactive Plotly figure with subplots
+            fig = make_subplots(
+                rows=2, cols=2,
+                subplot_titles=['PCA - Pottery Shape Analysis', 
+                               'Top 10 Feature Contributions to PC1',
+                               'Distribution of Key Shape Features',
+                               'Feature Correlation Matrix'],
+                specs=[[{"type": "scatter"}, {"type": "bar"}],
+                       [{"type": "box"}, {"type": "heatmap"}]],
+                vertical_spacing=0.12,
+                horizontal_spacing=0.1
+            )
+            
+            # PCA scatter plot
+            if X_pca.shape[1] > 1:
+                fig.add_trace(
+                    go.Scatter(
+                        x=X_pca[:, 0], 
+                        y=X_pca[:, 1],
+                        mode='markers+text',
+                        text=[str(inv) for inv in inv_numbers],
+                        textposition='top center',
+                        marker=dict(size=12, color='#ff6b6b', line=dict(width=2, color='darkred')),
+                        name='Pottery samples'
+                    ),
+                    row=1, col=1
+                )
+                fig.update_xaxes(title_text=f'PC1 ({pca.explained_variance_ratio_[0]:.1%})', row=1, col=1)
+                fig.update_yaxes(title_text=f'PC2 ({pca.explained_variance_ratio_[1]:.1%})', row=1, col=1)
+            else:
+                fig.add_trace(
+                    go.Scatter(
+                        x=X_pca[:, 0], 
+                        y=np.zeros_like(X_pca[:, 0]),
+                        mode='markers+text',
+                        text=[str(inv) for inv in inv_numbers],
+                        textposition='top center',
+                        marker=dict(size=12, color='#ff6b6b'),
+                        name='Pottery samples'
+                    ),
+                    row=1, col=1
+                )
+                fig.update_xaxes(title_text=f'PC1 ({pca.explained_variance_ratio_[0]:.1%})', row=1, col=1)
+            
+            # Feature importance bar chart
+            feature_importance = np.abs(pca.components_[0])
+            sorted_idx = np.argsort(feature_importance)[::-1][:10]
+            fig.add_trace(
+                go.Bar(
+                    x=feature_importance[sorted_idx],
+                    y=[feature_names[i] for i in sorted_idx],
+                    orientation='h',
+                    marker_color='#4ecdc4',
+                    name='Feature Importance'
+                ),
+                row=1, col=2
+            )
+            fig.update_xaxes(title_text='Absolute Loading on PC1', row=1, col=2)
+            
+            # Box plots for key features
+            for i, feature in enumerate(['area', 'aspect_ratio', 'circularity']):
+                fig.add_trace(
+                    go.Box(
+                        y=features_df[feature],
+                        name=feature,
+                        marker_color=['#ff6b6b', '#4ecdc4', '#45b7d1'][i]
+                    ),
+                    row=2, col=1
+                )
+            
+            # Correlation heatmap
+            top_features = ['area', 'perimeter', 'aspect_ratio', 'circularity', 'solidity']
+            corr_matrix = features_df[top_features].corr()
+            fig.add_trace(
+                go.Heatmap(
+                    z=corr_matrix.values,
+                    x=top_features,
+                    y=top_features,
+                    colorscale='RdBu',
+                    zmid=0,
+                    text=np.round(corr_matrix.values, 2),
+                    texttemplate='%{text}',
+                    textfont={"size": 10},
+                    name='Correlation'
+                ),
+                row=2, col=2
+            )
+            
+            # Update layout
+            fig.update_layout(
+                height=800,
+                showlegend=False,
+                title_text="<b>PCA Analysis Results - Interactive Visualization</b>",
+                title_font=dict(size=20)
+            )
+            
+            # Save as interactive HTML
+            fig.write_html(os.path.join(output_dir, 'pca_analysis_interactive.html'))
+            # Save static image
+            fig.write_image(os.path.join(output_dir, 'pca_analysis.png'), width=1200, height=800)
+            
+            # Save feature data
+            features_df.to_csv(os.path.join(output_dir, 'shape_features.csv'), index=False)
+            
+            # Save PCA summary
+            with open(os.path.join(output_dir, 'pca_summary.txt'), 'w') as f:
+                f.write("PCA Analysis Summary\n")
+                f.write("===================\n\n")
+                f.write(f"Number of samples: {len(feature_list)}\n")
+                f.write(f"Number of features: {len(feature_names)}\n")
+                f.write(f"Explained variance ratio: {pca.explained_variance_ratio_}\n")
+                f.write(f"Total variance explained: {sum(pca.explained_variance_ratio_):.1%}\n\n")
+                f.write("Feature statistics:\n")
+                f.write(features_df.describe().to_string())
+        
+        return X_pca, features_df
+    
+    def add_continuation_lines(self, mask: np.ndarray, gap_threshold: int = 20) -> np.ndarray:
+        """
+        Add continuation lines to fragmented pottery profiles.
+        
+        Args:
+            mask: Binary mask of pottery profile
+            gap_threshold: Minimum gap size in pixels to add continuation lines
+            
+        Returns:
+            Mask with continuation lines added
+        """
+        import cv2
+        from scipy import ndimage
+        
+        # Create a copy to work with
+        result_mask = mask.copy()
+        
+        # Find contours
+        contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            return mask
+        
+        # Get the main contour (largest)
+        main_contour = max(contours, key=cv2.contourArea)
+        
+        # Extract boundary points from left side (profile edge)
+        boundary_points = []
+        for point in main_contour:
+            boundary_points.append((point[0][1], point[0][0]))  # (y, x) format
+        
+        # Sort by y-coordinate
+        boundary_points.sort(key=lambda p: p[0])
+        
+        # Find gaps in the profile
+        gaps = []
+        for i in range(1, len(boundary_points)):
+            y_gap = boundary_points[i][0] - boundary_points[i-1][0]
+            if y_gap > gap_threshold:
+                # Found a gap
+                gap_start = boundary_points[i-1]
+                gap_end = boundary_points[i]
+                gaps.append((gap_start, gap_end))
+        
+        # Draw continuation lines for gaps
+        for gap_start, gap_end in gaps:
+            # Create a dashed line pattern
+            y1, x1 = gap_start
+            y2, x2 = gap_end
+            
+            # Calculate line parameters
+            num_dashes = max(3, (y2 - y1) // 10)
+            dash_length = (y2 - y1) / (2 * num_dashes)
+            
+            # Draw dashed line
+            for i in range(num_dashes):
+                dash_start_y = int(y1 + i * 2 * dash_length)
+                dash_end_y = int(y1 + (i * 2 + 1) * dash_length)
+                
+                # Interpolate x coordinates
+                t_start = (dash_start_y - y1) / (y2 - y1)
+                t_end = (dash_end_y - y1) / (y2 - y1)
+                dash_start_x = int(x1 + t_start * (x2 - x1))
+                dash_end_x = int(x1 + t_end * (x2 - x1))
+                
+                # Draw the dash segment
+                cv2.line(result_mask, (dash_start_x, dash_start_y), 
+                        (dash_end_x, dash_end_y), 1, thickness=2)
+        
+        return result_mask
+    
+    def detect_fragments(self, mask: np.ndarray, min_fragment_size: int = 100) -> List[np.ndarray]:
+        """
+        Detect separate fragments in a pottery mask.
+        
+        Args:
+            mask: Binary mask
+            min_fragment_size: Minimum size for a valid fragment
+            
+        Returns:
+            List of fragment masks
+        """
+        from skimage import measure
+        
+        # Label connected components
+        labeled_mask = measure.label(mask, connectivity=1)
+        regions = measure.regionprops(labeled_mask)
+        
+        # Filter fragments by size
+        fragments = []
+        for region in regions:
+            if region.area >= min_fragment_size:
+                # Create individual fragment mask
+                fragment_mask = np.zeros_like(mask)
+                fragment_mask[labeled_mask == region.label] = 1
+                fragments.append(fragment_mask)
+        
+        return fragments
+    
 def find_bounding_box(mask: np.ndarray) -> Tuple[int, int, int, int]:
     """
     Find the bounding box of a binary mask.
@@ -884,8 +1329,8 @@ if __name__ == "__main__":
     # Example usage
     processor = ImageProcessor(model_path="Ceramatic_model_V1.pt")
     results = processor.process_images(
-        imgs_dir="eccoli\imgs",
-        tabular_file="eccoli\metadata_example.xlsx",
+        imgs_dir="eccoli/imgs",
+        tabular_file="eccoli/metadata_example.xlsx",
         confidence_threshold=0.8,
         diagnostic=True,
         diagnostic_plots=True,
